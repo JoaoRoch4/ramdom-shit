@@ -7,8 +7,9 @@ Programa de terminal que criptografa e descriptografa mensagens de dois jeitos:
 | 1 / 2 | Gera uma **chave aleatória** de 32 bytes, mostra a chave e a mensagem criptografada; com as duas, recupera o original. |
 | 3 / 4 | Usa uma **senha**: a chave é derivada com **Argon2id** e um salt aleatório. |
 
-A senha não aparece na tela enquanto é digitada (termios no Linux/macOS,
-`SetConsoleMode` no Windows) e é pedida duas vezes ao criptografar.
+Ao digitar a senha aparece `*` para cada caractere (Backspace apaga,
+Ctrl+C cancela). A leitura é tecla a tecla: `termios` no Linux/macOS e
+`_getch()` no Windows. A senha é pedida duas vezes ao criptografar.
 
 A cifra é a **XChaCha20-Poly1305** (AEAD): esconde a mensagem e detecta qualquer
 alteração, chave errada ou senha errada.

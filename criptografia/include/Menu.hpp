@@ -15,7 +15,7 @@
  * @brief Menu interativo de terminal para criptografar e descriptografar.
  *
  * Exibe as opções, lê as respostas do usuário e usa um Criptografador para
- * fazer o trabalho. Senhas são lidas sem aparecer na tela.
+ * fazer o trabalho. Senhas aparecem como `*` enquanto são digitadas.
  *
  * @code
  * Menu menu;
@@ -68,13 +68,15 @@ private:
     static std::string perguntar(std::string_view pergunta);
 
     /**
-     * @brief Mostra um texto e lê uma senha sem exibi-la na tela.
+     * @brief Mostra um texto e lê uma senha exibindo `*` no lugar de cada caractere.
      *
-     * Se a entrada não for um terminal (ex.: redirecionada de um arquivo),
-     * a leitura é feita normalmente.
+     * Aceita Backspace para apagar e Ctrl+C para cancelar. Se a entrada não
+     * for um terminal (ex.: redirecionada de um arquivo), a leitura é feita
+     * normalmente, linha a linha.
      *
      * @param pergunta Texto exibido antes da leitura.
      * @return A senha digitada.
+     * @throws ErroCriptografia se o usuário cancelar com Ctrl+C.
      */
     static std::string perguntarSenha(std::string_view pergunta);
 

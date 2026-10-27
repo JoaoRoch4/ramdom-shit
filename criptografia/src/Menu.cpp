@@ -1,6 +1,6 @@
 /**
  * @file Menu.cpp
- * @brief Implementação da classe Menu, incluindo a leitura de senha oculta.
+ * @brief Implementação da classe Menu, incluindo a leitura de senha com asteriscos.
  */
 
 #include "Menu.hpp"
@@ -12,6 +12,8 @@
 #ifdef _WIN32
     #define NOMINMAX
     #include <windows.h>
+    #include <conio.h>
+    #include <io.h>
 #else
     #include <termios.h>
     #include <unistd.h>
@@ -19,56 +21,95 @@
 
 namespace {
 
+/// Código da tecla Ctrl+C quando ela chega como caractere comum.
+constexpr int CTRL_C = 3;
+
+/// Código da tecla Ctrl+D (fim de entrada no Linux/macOS).
+constexpr int CTRL_D = 4;
+
+/// Backspace no Windows e em alguns terminais.
+constexpr int BACKSPACE = 8;
+
+/// Backspace na maioria dos terminais Linux/macOS.
+constexpr int DELETE = 127;
+
 /**
- * @brief Desliga o eco do terminal enquanto o objeto existir (RAII).
+ * @brief Coloca o terminal em modo "tecla a tecla, sem eco" enquanto o
+ *        objeto existir (RAII).
  *
- * O construtor esconde o que é digitado e o destrutor restaura o terminal,
+ * O construtor altera o terminal e o destrutor restaura o modo original,
  * mesmo que uma exceção seja lançada no meio da leitura.
  */
-class EcoDesligado {
+class TerminalSenha {
 public:
-    /// Salva o modo atual do terminal e desliga o eco, se for um terminal.
-    EcoDesligado() {
+    /// Salva o modo atual e desliga eco, modo canônico e sinais, se for um terminal.
+    TerminalSenha() {
 #ifdef _WIN32
-        entrada_ = GetStdHandle(STD_INPUT_HANDLE);
-        ativo_ = GetConsoleMode(entrada_, &modoOriginal_) != 0;
-        if (ativo_) {
-            SetConsoleMode(entrada_, modoOriginal_ & ~ENABLE_ECHO_INPUT);
-        }
+        // No Windows, _getch() já lê uma tecla por vez e sem eco.
+        ativo_ = _isatty(_fileno(stdin)) != 0;
 #else
         ativo_ = tcgetattr(STDIN_FILENO, &modoOriginal_) == 0;
         if (ativo_) {
-            termios semEco = modoOriginal_;
-            semEco.c_lflag &= ~static_cast<tcflag_t>(ECHO);
-            tcsetattr(STDIN_FILENO, TCSANOW, &semEco);
+            termios modo = modoOriginal_;
+            // ECHO: não mostrar teclas; ICANON: não esperar o Enter;
+            // ISIG: Ctrl+C chega como caractere em vez de matar o programa.
+            modo.c_lflag &= ~static_cast<tcflag_t>(ECHO | ICANON | ISIG);
+            modo.c_cc[VMIN] = 1;   // read() retorna a cada 1 tecla
+            modo.c_cc[VTIME] = 0;  // sem tempo limite
+            tcsetattr(STDIN_FILENO, TCSANOW, &modo);
         }
 #endif
     }
 
     /// Restaura o modo original do terminal.
-    ~EcoDesligado() {
-        if (!ativo_) return;
-#ifdef _WIN32
-        SetConsoleMode(entrada_, modoOriginal_);
-#else
-        tcsetattr(STDIN_FILENO, TCSANOW, &modoOriginal_);
+    ~TerminalSenha() {
+#ifndef _WIN32
+        if (ativo_) tcsetattr(STDIN_FILENO, TCSANOW, &modoOriginal_);
 #endif
-        // O Enter não foi ecoado, então pulamos a linha manualmente.
-        std::println("");
     }
 
-    EcoDesligado(const EcoDesligado&) = delete;
-    EcoDesligado& operator=(const EcoDesligado&) = delete;
+    TerminalSenha(const TerminalSenha&) = delete;
+    TerminalSenha& operator=(const TerminalSenha&) = delete;
+
+    /**
+     * @brief Informa se a entrada é um terminal interativo.
+     * @return false quando a entrada vem de um arquivo ou pipe.
+     */
+    bool ativo() const { return ativo_; }
+
+    /**
+     * @brief Lê uma única tecla, sem esperar o Enter.
+     * @return O código da tecla ou EOF se a entrada acabou.
+     */
+    int lerTecla() const {
+#ifdef _WIN32
+        int tecla = _getch();
+        // Setas, F1... chegam como dois códigos (0 ou 0xE0 + código); ignoramos.
+        while (tecla == 0 || tecla == 0xE0) {
+            _getch();
+            tecla = _getch();
+        }
+        return tecla;
+#else
+        return std::getchar();
+#endif
+    }
 
 private:
-    bool ativo_ = false; ///< true se a entrada é um terminal e o eco foi desligado.
-#ifdef _WIN32
-    HANDLE entrada_ = nullptr; ///< Handle da entrada do console.
-    DWORD modoOriginal_ = 0;   ///< Modo do console antes da alteração.
-#else
-    termios modoOriginal_{};   ///< Configuração do terminal antes da alteração.
+    bool ativo_ = false; ///< true se a entrada é um terminal.
+#ifndef _WIN32
+    termios modoOriginal_{}; ///< Configuração do terminal antes da alteração.
 #endif
 };
+
+/**
+ * @brief Diz se um byte é a continuação de um caractere UTF-8 (10xxxxxx).
+ * @param byte Byte a verificar.
+ * @return true se não for o primeiro byte de um caractere.
+ */
+bool ehContinuacaoUtf8(unsigned char byte) {
+    return (byte & 0xC0) == 0x80;
+}
 
 } // namespace
 
@@ -143,12 +184,45 @@ std::string Menu::perguntar(std::string_view pergunta) {
 
 std::string Menu::perguntarSenha(std::string_view pergunta) {
     std::print("{}", pergunta);
-    std::fflush(stdout);  // garante que a pergunta apareça antes de desligar o eco
+    std::fflush(stdout);
 
+    TerminalSenha terminal;  // modo original volta automaticamente no fim da função
     std::string senha;
-    {
-        EcoDesligado semEco;  // eco volta automaticamente ao sair deste bloco
+
+    if (!terminal.ativo()) {
+        // Entrada redirecionada (arquivo/pipe): lê a linha normalmente.
         std::getline(std::cin, senha);
+        return senha;
     }
+
+    while (true) {
+        int tecla = terminal.lerTecla();
+
+        if (tecla == '\n' || tecla == '\r' || tecla == EOF || tecla == CTRL_D) {
+            break;
+        }
+        if (tecla == CTRL_C) {
+            std::println("");
+            throw ErroCriptografia("Operacao cancelada.");
+        }
+        if (tecla == BACKSPACE || tecla == DELETE) {
+            if (senha.empty()) continue;
+            // Remove o caractere inteiro (acentos ocupam vários bytes em UTF-8).
+            while (!senha.empty() && ehContinuacaoUtf8(static_cast<unsigned char>(senha.back()))) {
+                senha.pop_back();
+            }
+            senha.pop_back();
+            std::print("\b \b");  // volta, apaga o '*' com espaço, volta de novo
+        } else if (static_cast<unsigned char>(tecla) >= 32) {
+            senha.push_back(static_cast<char>(tecla));
+            // Um '*' por caractere: bytes de continuação UTF-8 não ganham outro.
+            if (!ehContinuacaoUtf8(static_cast<unsigned char>(tecla))) {
+                std::print("*");
+            }
+        }
+        std::fflush(stdout);
+    }
+
+    std::println("");  // o Enter não foi exibido, então pulamos a linha aqui
     return senha;
 }

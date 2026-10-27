@@ -5,8 +5,6 @@
 
 #include "Cofre.hpp"
 
-#include <sodium.h>
-
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -91,46 +89,31 @@ std::vector<std::string> dividir(const std::string& linha) {
     return campos;
 }
 
-/**
- * @brief Apaga o conteúdo de uma string da memória.
- * @param texto String a apagar.
- */
-void apagar(std::string& texto) {
-    sodium_memzero(texto.data(), texto.size());
-    texto.clear();
-}
-
 } // namespace
 
 std::string_view nomeDoTipo(TipoSegredo tipo) {
     return tipo == TipoSegredo::Chave ? "chave" : "senha";
 }
 
-bool RegistroCofre::confere(std::string_view outro) const {
+bool RegistroCofre::confere(const Segredo<std::string>& outro) const {
+    if (tipo == TipoSegredo::Senha) return outro == segredo;
+
     // Chaves em hex são comparadas sem diferenciar maiúsculas/minúsculas.
-    const std::string normalizado = tipo == TipoSegredo::Chave ? minusculas(outro) : std::string(outro);
-    if (normalizado.size() != segredo.size()) return false;
-    return sodium_memcmp(normalizado.data(), segredo.data(), segredo.size()) == 0;
+    Segredo<std::string> normalizado(minusculas(outro.valor()));
+    return normalizado == segredo;  // operator== do Segredo: tempo constante
 }
 
 Cofre::Cofre(std::filesystem::path arquivo, const Criptografador& cripto)
     : arquivo_(std::move(arquivo)), cripto_(cripto) {}
 
-Cofre::~Cofre() {
-    apagar(senhaMestra_);
-    for (RegistroCofre& registro : registros_) {
-        apagar(registro.segredo);
-    }
-}
-
 bool Cofre::existe() const {
     return std::filesystem::exists(arquivo_);
 }
 
-void Cofre::abrir(const std::string& senhaMestra) {
+void Cofre::abrir(Segredo<std::string> senhaMestra) {
     if (!existe()) {
         // Cofre novo: começa vazio e já é gravado no disco.
-        senhaMestra_ = senhaMestra;
+        senhaMestra_ = std::move(senhaMestra);
         registros_.clear();
         aberto_ = true;
         salvar();
@@ -143,20 +126,19 @@ void Cofre::abrir(const std::string& senhaMestra) {
         throw ErroCofre("Nao foi possivel ler o cofre: " + arquivo_.string());
     }
 
-    std::string texto;
+    Segredo<std::string> texto;
     try {
-        texto = cripto_.descriptografarComSenha(conteudo, senhaMestra);
+        texto = Segredo<std::string>(cripto_.descriptografarComSenha(conteudo, senhaMestra));
     } catch (const ErroCriptografia&) {
         throw ErroCofre("Senha mestra incorreta ou cofre corrompido.");
     }
 
-    desserializar(texto);
-    apagar(texto);
-    senhaMestra_ = senhaMestra;
+    desserializar(texto.valor());
+    senhaMestra_ = std::move(senhaMestra);
     aberto_ = true;
 }
 
-const RegistroCofre& Cofre::adicionar(TipoSegredo tipo, const std::string& segredo,
+const RegistroCofre& Cofre::adicionar(TipoSegredo tipo, Segredo<std::string> segredo,
                                       std::string_view cifradoHex, const std::string& descricao) {
     if (!aberto_) throw ErroCofre("O cofre nao esta aberto.");
 
@@ -164,7 +146,8 @@ const RegistroCofre& Cofre::adicionar(TipoSegredo tipo, const std::string& segre
     registro.id = registros_.empty() ? 1 : registros_.back().id + 1;
     registro.dataHora = agora();
     registro.tipo = tipo;
-    registro.segredo = tipo == TipoSegredo::Chave ? minusculas(segredo) : segredo;
+    registro.segredo = tipo == TipoSegredo::Chave ? Segredo<std::string>(minusculas(segredo.valor()))
+                                                  : std::move(segredo);
     registro.impressaoDigital = impressaoDigital(cifradoHex);
     registro.descricao = descricao;
     registros_.push_back(std::move(registro));
@@ -173,7 +156,6 @@ const RegistroCofre& Cofre::adicionar(TipoSegredo tipo, const std::string& segre
         salvar();
     } catch (...) {
         // Se não deu para gravar, desfaz para memória e disco continuarem iguais.
-        apagar(registros_.back().segredo);
         registros_.pop_back();
         throw;
     }
@@ -195,9 +177,8 @@ const std::vector<RegistroCofre>& Cofre::registros() const {
 void Cofre::salvar() const {
     if (!aberto_) throw ErroCofre("O cofre nao esta aberto.");
 
-    std::string texto = serializar();
+    Segredo<std::string> texto(serializar());
     const std::string conteudo = cripto_.criptografarComSenha(texto, senhaMestra_);
-    apagar(texto);
 
     // Grava num temporário e só então substitui o arquivo antigo.
     std::filesystem::path temporario = arquivo_;
@@ -223,7 +204,7 @@ std::string Cofre::serializar() const {
     saida << CABECALHO << '\n';
     for (const RegistroCofre& r : registros_) {
         saida << r.id << '\t' << r.dataHora << '\t' << nomeDoTipo(r.tipo) << '\t'
-              << r.impressaoDigital << '\t' << textoParaHex(r.segredo) << '\t'
+              << r.impressaoDigital << '\t' << textoParaHex(r.segredo.valor()) << '\t'
               << textoParaHex(r.descricao) << '\n';
     }
     return saida.str();
@@ -248,10 +229,10 @@ void Cofre::desserializar(const std::string& texto) {
             r.dataHora = campos[1];
             r.tipo = campos[2] == "chave" ? TipoSegredo::Chave : TipoSegredo::Senha;
             r.impressaoDigital = campos[3];
-            r.segredo = hexParaTexto(campos[4]);
+            Segredo<std::string> segredoHex(std::move(campos[4]));  // zera campos[4]
+            r.segredo = Segredo<std::string>(hexParaTexto(segredoHex.valor()));
             r.descricao = hexParaTexto(campos[5]);
             lidos.push_back(std::move(r));
-            apagar(campos[4]);
         }
     } catch (const ErroCofre&) {
         throw;

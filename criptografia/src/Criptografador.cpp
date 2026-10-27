@@ -22,15 +22,24 @@ constexpr std::size_t TAMANHO_TAG = crypto_aead_xchacha20poly1305_ietf_ABYTES;
 constexpr std::size_t TAMANHO_SALT = crypto_pwhash_SALTBYTES;
 
 /**
+ * @brief Garante que a chave tem o tamanho certo.
+ * @param chave Chave a verificar.
+ * @throws ErroCriptografia se não tiver 32 bytes.
+ */
+void validarChave(std::span<const unsigned char> chave) {
+    if (chave.size() != TAMANHO_CHAVE) {
+        throw ErroCriptografia("A chave deve ter " + std::to_string(TAMANHO_CHAVE) + " bytes.");
+    }
+}
+
+/**
  * @brief Criptografa bytes com XChaCha20-Poly1305.
  * @param mensagem Texto puro.
  * @param chave Chave de 32 bytes.
  * @return `nonce || cifrado + tag`.
  */
-Bytes cifrar(const std::string& mensagem, const Bytes& chave) {
-    if (chave.size() != TAMANHO_CHAVE) {
-        throw ErroCriptografia("A chave deve ter " + std::to_string(TAMANHO_CHAVE) + " bytes.");
-    }
+Bytes cifrar(std::span<const unsigned char> mensagem, std::span<const unsigned char> chave) {
+    validarChave(chave);
 
     // O nonce ("number used once") garante que a mesma mensagem com a mesma
     // chave gere textos cifrados diferentes. Ele não é secreto.
@@ -42,7 +51,7 @@ Bytes cifrar(const std::string& mensagem, const Bytes& chave) {
     unsigned long long tamanhoCifrado = 0;
     crypto_aead_xchacha20poly1305_ietf_encrypt(
         cifrado, &tamanhoCifrado,
-        reinterpret_cast<const unsigned char*>(mensagem.data()), mensagem.size(),
+        mensagem.data(), mensagem.size(),
         nullptr, 0,  // sem dados adicionais autenticados
         nullptr,     // parâmetro não usado por este algoritmo
         nonce, chave.data());
@@ -56,19 +65,16 @@ Bytes cifrar(const std::string& mensagem, const Bytes& chave) {
  * @param chave Chave de 32 bytes.
  * @return A mensagem original.
  */
-std::string decifrar(const Bytes& dados, const Bytes& chave) {
-    if (chave.size() != TAMANHO_CHAVE) {
-        throw ErroCriptografia("A chave deve ter " + std::to_string(TAMANHO_CHAVE) + " bytes.");
-    }
+std::string decifrar(std::span<const unsigned char> dados, std::span<const unsigned char> chave) {
+    validarChave(chave);
     if (dados.size() < TAMANHO_NONCE + TAMANHO_TAG) {
         throw ErroCriptografia("Texto cifrado curto demais.");
     }
 
-    const unsigned char* nonce = dados.data();
-    const unsigned char* cifrado = dados.data() + TAMANHO_NONCE;
-    const std::size_t tamanhoCifrado = dados.size() - TAMANHO_NONCE;
+    std::span<const unsigned char> nonce = dados.first(TAMANHO_NONCE);
+    std::span<const unsigned char> cifrado = dados.subspan(TAMANHO_NONCE);
 
-    std::string mensagem(tamanhoCifrado - TAMANHO_TAG, '\0');
+    std::string mensagem(cifrado.size() - TAMANHO_TAG, '\0');
     unsigned long long tamanhoMensagem = 0;
 
     // Se a tag não bater (chave errada ou dados alterados), a função
@@ -76,9 +82,9 @@ std::string decifrar(const Bytes& dados, const Bytes& chave) {
     if (crypto_aead_xchacha20poly1305_ietf_decrypt(
             reinterpret_cast<unsigned char*>(mensagem.data()), &tamanhoMensagem,
             nullptr,
-            cifrado, tamanhoCifrado,
+            cifrado.data(), cifrado.size(),
             nullptr, 0,
-            nonce, chave.data()) != 0) {
+            nonce.data(), chave.data()) != 0) {
         throw ErroCriptografia("Falha ao descriptografar: chave/senha errada ou mensagem alterada.");
     }
 
@@ -96,29 +102,31 @@ Criptografador::Criptografador() {
     }
 }
 
-Bytes Criptografador::gerarChave() const {
+Segredo<Bytes> Criptografador::gerarChave() const {
     Bytes chave(TAMANHO_CHAVE);
     crypto_aead_xchacha20poly1305_ietf_keygen(chave.data());
-    return chave;
+    return Segredo<Bytes>(std::move(chave));  // a cópia temporária é zerada
 }
 
-std::string Criptografador::criptografar(const std::string& mensagem, const Bytes& chave) const {
+std::string Criptografador::criptografarBytes(std::span<const unsigned char> mensagem,
+                                              std::span<const unsigned char> chave) const {
     return paraHex(cifrar(mensagem, chave));
 }
 
-std::string Criptografador::descriptografar(const std::string& cifradoHex, const Bytes& chave) const {
+std::string Criptografador::descriptografarBytes(std::string_view cifradoHex,
+                                                 std::span<const unsigned char> chave) const {
     return decifrar(deHex(cifradoHex), chave);
 }
 
-std::string Criptografador::criptografarComSenha(const std::string& mensagem,
-                                                 const std::string& senha) const {
+std::string Criptografador::criptografarComSenhaBytes(std::span<const unsigned char> mensagem,
+                                                      std::span<const unsigned char> senha) const {
     // Um salt novo por mensagem faz a mesma senha gerar chaves diferentes.
     Bytes salt(TAMANHO_SALT);
     randombytes_buf(salt.data(), salt.size());
 
-    Bytes chave = derivarChave(senha, salt);
+    // A chave derivada é um Segredo: é apagada sozinha ao fim da função.
+    Segredo<Bytes> chave = derivarChave(senha, salt);
     Bytes cifrado = cifrar(mensagem, chave);
-    sodium_memzero(chave.data(), chave.size());  // apaga a chave da memória
 
     // Resultado final: salt || nonce || cifrado + tag
     Bytes resultado(salt);
@@ -126,29 +134,20 @@ std::string Criptografador::criptografarComSenha(const std::string& mensagem,
     return paraHex(resultado);
 }
 
-std::string Criptografador::descriptografarComSenha(const std::string& cifradoHex,
-                                                    const std::string& senha) const {
+std::string Criptografador::descriptografarComSenhaBytes(std::string_view cifradoHex,
+                                                         std::span<const unsigned char> senha) const {
     Bytes dados = deHex(cifradoHex);
     if (dados.size() < TAMANHO_SALT) {
         throw ErroCriptografia("Texto cifrado curto demais.");
     }
 
     // Separa o salt do restante para reconstruir a mesma chave.
-    Bytes salt(dados.begin(), dados.begin() + TAMANHO_SALT);
-    Bytes resto(dados.begin() + TAMANHO_SALT, dados.end());
-
-    Bytes chave = derivarChave(senha, salt);
-    try {
-        std::string mensagem = decifrar(resto, chave);
-        sodium_memzero(chave.data(), chave.size());
-        return mensagem;
-    } catch (...) {
-        sodium_memzero(chave.data(), chave.size());
-        throw;
-    }
+    std::span<const unsigned char> tudo(dados);
+    Segredo<Bytes> chave = derivarChave(senha, tudo.first(TAMANHO_SALT));
+    return decifrar(tudo.subspan(TAMANHO_SALT), chave);
 }
 
-std::string Criptografador::paraHex(const Bytes& bytes) {
+std::string Criptografador::paraHexBytes(std::span<const unsigned char> bytes) {
     // Cada byte vira 2 caracteres, mais 1 para o '\0' final.
     std::string hex(bytes.size() * 2 + 1, '\0');
     sodium_bin2hex(hex.data(), hex.size(), bytes.data(), bytes.size());
@@ -156,7 +155,7 @@ std::string Criptografador::paraHex(const Bytes& bytes) {
     return hex;
 }
 
-Bytes Criptografador::deHex(const std::string& hex) {
+Bytes Criptografador::deHex(std::string_view hex) {
     Bytes bytes(hex.size() / 2);
     std::size_t tamanho = 0;
     const char* fim = nullptr;
@@ -171,18 +170,19 @@ Bytes Criptografador::deHex(const std::string& hex) {
     return bytes;
 }
 
-Bytes Criptografador::derivarChave(const std::string& senha, const Bytes& salt) const {
+Segredo<Bytes> Criptografador::derivarChave(std::span<const unsigned char> senha,
+                                            std::span<const unsigned char> salt) const {
     Bytes chave(TAMANHO_CHAVE);
 
     // OPSLIMIT/MEMLIMIT_INTERACTIVE: ~64 MiB de memória e algumas iterações.
     // É o custo recomendado para uso interativo.
     if (crypto_pwhash(chave.data(), chave.size(),
-                      senha.data(), senha.size(),
+                      reinterpret_cast<const char*>(senha.data()), senha.size(),
                       salt.data(),
                       crypto_pwhash_OPSLIMIT_INTERACTIVE,
                       crypto_pwhash_MEMLIMIT_INTERACTIVE,
                       crypto_pwhash_ALG_ARGON2ID13) != 0) {
         throw ErroCriptografia("Memoria insuficiente para derivar a chave.");
     }
-    return chave;
+    return Segredo<Bytes>(std::move(chave));
 }

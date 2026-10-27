@@ -152,13 +152,13 @@ void Menu::abrirCofre() {
     if (!cofre_.existe()) {
         std::println("Nenhum cofre encontrado. Vamos criar um novo.");
         for (int i = 0; i < TENTATIVAS; ++i) {
-            std::string senha = perguntarSenha("Crie a senha mestra: ");
+            Segredo<std::string> senha = perguntarSenha("Crie a senha mestra: ");
             if (senha.empty()) {
                 std::println("A senha mestra nao pode ser vazia.");
             } else if (senha != perguntarSenha("Confirme a senha mestra: ")) {
                 std::println("As senhas nao conferem.");
             } else {
-                cofre_.abrir(senha);
+                cofre_.abrir(std::move(senha));
                 std::println("Cofre criado.\n");
                 return;
             }
@@ -180,47 +180,48 @@ void Menu::abrirCofre() {
 
 void Menu::criptografarComChave() {
     std::string mensagem = perguntar("Digite a mensagem: ");
-    Bytes chave = cripto_.gerarChave();
-    std::string chaveHex = Criptografador::paraHex(chave);
+    Segredo<Bytes> chave = cripto_.gerarChave();
+    Segredo<std::string> chaveHex(Criptografador::paraHex(chave));
     std::string cifrado = cripto_.criptografar(mensagem, chave);
 
-    std::println("\nChave (guarde-a!):      {}", chaveHex);
+    std::println("\nChave (guarde-a!):      {}", chaveHex.valor());
     std::println("Mensagem criptografada: {}\n", cifrado);
-    registrarNoCofre(TipoSegredo::Chave, chaveHex, cifrado);
+    registrarNoCofre(TipoSegredo::Chave, std::move(chaveHex), cifrado);
 }
 
 void Menu::descriptografarComChave() {
     std::string cifrado = perguntar("Digite a mensagem criptografada (hex): ");
     const RegistroCofre* registro = consultarCofre(cifrado, TipoSegredo::Chave);
 
-    std::string chaveHex = perguntar(registro ? "Digite a chave (hex) [Enter = usar a do cofre]: "
-                                              : "Digite a chave (hex): ");
-    chaveHex = resolverSegredo(registro, chaveHex);
+    Segredo<std::string> chaveHex(perguntar(registro ? "Digite a chave (hex) [Enter = usar a do cofre]: "
+                                                     : "Digite a chave (hex): "));
+    chaveHex = resolverSegredo(registro, std::move(chaveHex));
+    Segredo<Bytes> chave(Criptografador::deHex(chaveHex.valor()));
 
     // Calcula antes de imprimir: se lançar exceção, nada é exibido pela metade.
-    std::string original = cripto_.descriptografar(cifrado, Criptografador::deHex(chaveHex));
+    std::string original = cripto_.descriptografar(cifrado, chave);
     std::println("\nMensagem original: {}\n", original);
 }
 
 void Menu::criptografarComSenha() {
     std::string mensagem = perguntar("Digite a mensagem: ");
-    std::string senha = perguntarSenha("Digite a senha: ");
-    if (senha != perguntarSenha("Confirme a senha: ")) {
+    Segredo<std::string> senha = perguntarSenha("Digite a senha: ");
+    if (senha != perguntarSenha("Confirme a senha: ")) {  // operator== do Segredo
         throw ErroCriptografia("As senhas nao conferem.");
     }
 
     std::string cifrado = cripto_.criptografarComSenha(mensagem, senha);
     std::println("\nMensagem criptografada: {}\n", cifrado);
-    registrarNoCofre(TipoSegredo::Senha, senha, cifrado);
+    registrarNoCofre(TipoSegredo::Senha, std::move(senha), cifrado);
 }
 
 void Menu::descriptografarComSenha() {
     std::string cifrado = perguntar("Digite a mensagem criptografada (hex): ");
     const RegistroCofre* registro = consultarCofre(cifrado, TipoSegredo::Senha);
 
-    std::string senha = perguntarSenha(registro ? "Digite a senha [Enter = usar a do cofre]: "
-                                                : "Digite a senha: ");
-    senha = resolverSegredo(registro, senha);
+    Segredo<std::string> senha = perguntarSenha(registro ? "Digite a senha [Enter = usar a do cofre]: "
+                                                         : "Digite a senha: ");
+    senha = resolverSegredo(registro, std::move(senha));
 
     std::string original = cripto_.descriptografarComSenha(cifrado, senha);
     std::println("\nMensagem original: {}\n", original);
@@ -236,7 +237,7 @@ void Menu::mostrarRegistro() const {
     std::println("\n=== Registro do cofre ({}) ===", registros.size());
     for (const RegistroCofre& r : registros) {
         std::println("#{:<3} {}  [{}]  msg {}...  {}", r.id, r.dataHora, nomeDoTipo(r.tipo),
-                     r.impressaoDigital.substr(0, 8), r.segredo);
+                     r.impressaoDigital.substr(0, 8), r.segredo.valor());
         if (!r.descricao.empty()) {
             std::println("     {}", r.descricao);
         }
@@ -244,9 +245,9 @@ void Menu::mostrarRegistro() const {
     std::println("");
 }
 
-void Menu::registrarNoCofre(TipoSegredo tipo, const std::string& segredo, const std::string& cifradoHex) {
+void Menu::registrarNoCofre(TipoSegredo tipo, Segredo<std::string> segredo, const std::string& cifradoHex) {
     std::string descricao = perguntar("Descricao para o cofre (opcional): ");
-    const RegistroCofre& registro = cofre_.adicionar(tipo, segredo, cifradoHex, descricao);
+    const RegistroCofre& registro = cofre_.adicionar(tipo, std::move(segredo), cifradoHex, descricao);
     std::println("Salvo no cofre como #{}.\n", registro.id);
 }
 
@@ -269,11 +270,12 @@ const RegistroCofre* Menu::consultarCofre(std::string_view cifradoHex, TipoSegre
     return registro;
 }
 
-std::string Menu::resolverSegredo(const RegistroCofre* registro, const std::string& digitado) {
+Segredo<std::string> Menu::resolverSegredo(const RegistroCofre* registro,
+                                           Segredo<std::string> digitado) {
     if (!registro) return digitado;
     if (digitado.empty()) {
         std::println("Usando o segredo guardado no registro #{}.", registro->id);
-        return registro->segredo;
+        return registro->segredo.copia();  // cópia explícita: Segredo não copia sem querer
     }
     if (registro->confere(digitado)) {
         std::println("[OK] Confere com o registro #{} do cofre.", registro->id);
@@ -290,7 +292,7 @@ std::string Menu::perguntar(std::string_view pergunta) {
     return resposta;
 }
 
-std::string Menu::perguntarSenha(std::string_view pergunta) {
+Segredo<std::string> Menu::perguntarSenha(std::string_view pergunta) {
     std::print("{}", pergunta);
     std::fflush(stdout);
 
@@ -300,7 +302,7 @@ std::string Menu::perguntarSenha(std::string_view pergunta) {
     if (!terminal.ativo()) {
         // Entrada redirecionada (arquivo/pipe): lê a linha normalmente.
         std::getline(std::cin, senha);
-        return senha;
+        return Segredo<std::string>(std::move(senha));
     }
 
     while (true) {
@@ -311,14 +313,18 @@ std::string Menu::perguntarSenha(std::string_view pergunta) {
         }
         if (tecla == CTRL_C) {
             std::println("");
+            Segredo<std::string> descartada(std::move(senha));  // zera o que já foi digitado
             throw ErroCriptografia("Operacao cancelada.");
         }
         if (tecla == BACKSPACE || tecla == DELETE) {
             if (senha.empty()) continue;
             // Remove o caractere inteiro (acentos ocupam vários bytes em UTF-8).
+            // Zera cada byte antes de remover: pop_back() só diminui o tamanho.
             while (!senha.empty() && ehContinuacaoUtf8(static_cast<unsigned char>(senha.back()))) {
+                senha.back() = '\0';
                 senha.pop_back();
             }
+            senha.back() = '\0';
             senha.pop_back();
             std::print("\b \b");  // volta, apaga o '*' com espaço, volta de novo
         } else if (static_cast<unsigned char>(tecla) >= 32) {
@@ -332,5 +338,5 @@ std::string Menu::perguntarSenha(std::string_view pergunta) {
     }
 
     std::println("");  // o Enter não foi exibido, então pulamos a linha aqui
-    return senha;
+    return Segredo<std::string>(std::move(senha));  // zera a string local
 }

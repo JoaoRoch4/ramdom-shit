@@ -8,6 +8,7 @@
 
 #include "Cofre.hpp"
 #include "Criptografador.hpp"
+#include "Segredo.hpp"
 
 #include <filesystem>
 #include <string>
@@ -87,7 +88,7 @@ private:
      * @param cifradoHex O texto cifrado gerado.
      * @throws ErroCofre se o cofre não puder ser salvo.
      */
-    void registrarNoCofre(TipoSegredo tipo, const std::string& segredo, const std::string& cifradoHex);
+    void registrarNoCofre(TipoSegredo tipo, Segredo<std::string> segredo, const std::string& cifradoHex);
 
     /**
      * @brief Procura a mensagem no cofre e informa o resultado ao usuário.
@@ -107,7 +108,8 @@ private:
      * @param digitado O que o usuário digitou.
      * @return O segredo a ser usado para descriptografar.
      */
-    static std::string resolverSegredo(const RegistroCofre* registro, const std::string& digitado);
+    static Segredo<std::string> resolverSegredo(const RegistroCofre* registro,
+                                                Segredo<std::string> digitado);
 
     /**
      * @brief Mostra um texto e lê uma linha inteira digitada pelo usuário.
@@ -124,10 +126,10 @@ private:
      * normalmente, linha a linha.
      *
      * @param pergunta Texto exibido antes da leitura.
-     * @return A senha digitada.
+     * @return A senha digitada, apagada da memória automaticamente.
      * @throws ErroCriptografia se o usuário cancelar com Ctrl+C.
      */
-    static std::string perguntarSenha(std::string_view pergunta);
+    static Segredo<std::string> perguntarSenha(std::string_view pergunta);
 
     // A ordem importa: cripto_ precisa ser construído antes de cofre_,
     // que guarda uma referência para ele.

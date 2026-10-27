@@ -14,14 +14,13 @@
 #ifndef CRIPTOGRAFADOR_HPP
 #define CRIPTOGRAFADOR_HPP
 
+#include "Bytes.hpp"
+#include "Segredo.hpp"
+
+#include <span>
 #include <stdexcept>
 #include <string>
-#include <vector>
-
-/**
- * @brief Sequência de bytes genérica (chaves, nonces, textos cifrados...).
- */
-using Bytes = std::vector<unsigned char>;
+#include <string_view>
 
 /**
  * @brief Exceção lançada quando uma operação criptográfica falha.
@@ -40,7 +39,12 @@ public:
 };
 
 /**
- * @brief Criptografa e descriptografa mensagens de texto com a libsodium.
+ * @brief Criptografa e descriptografa mensagens com a libsodium.
+ *
+ * As funções públicas são templates: aceitam qualquer ContainerDeBytes
+ * (`std::string`, `std::string_view`, `Bytes`, Segredo<T>...). Elas apenas
+ * convertem a entrada com comoBytes() e chamam a implementação real, que não
+ * é template e fica no `.cpp`. Assim o header continua pequeno.
  *
  * O resultado da criptografia é sempre devolvido em hexadecimal para poder
  * ser exibido na tela, copiado e colado.
@@ -54,8 +58,8 @@ public:
  *
  * @code
  * Criptografador cripto;
- * Bytes chave = cripto.gerarChave();
- * std::string cifrado = cripto.criptografar("Ola, mundo!", chave);
+ * Segredo<Bytes> chave = cripto.gerarChave();
+ * std::string cifrado = cripto.criptografar(std::string("Ola, mundo!"), chave);
  * std::string original = cripto.descriptografar(cifrado, chave);
  * @endcode
  */
@@ -73,9 +77,9 @@ public:
 
     /**
      * @brief Gera uma chave aleatória criptograficamente segura.
-     * @return Chave de 32 bytes.
+     * @return Chave de 32 bytes, apagada da memória automaticamente.
      */
-    Bytes gerarChave() const;
+    Segredo<Bytes> gerarChave() const;
 
     /**
      * @brief Criptografa uma mensagem com uma chave.
@@ -83,23 +87,32 @@ public:
      * Um nonce aleatório novo é gerado a cada chamada, então criptografar a
      * mesma mensagem duas vezes produz resultados diferentes.
      *
-     * @param mensagem Texto a ser criptografado.
+     * @tparam M Tipo da mensagem (deduzido).
+     * @tparam C Tipo da chave (deduzido).
+     * @param mensagem Texto ou bytes a criptografar.
      * @param chave Chave de 32 bytes (veja gerarChave()).
      * @return Nonce + texto cifrado, em hexadecimal.
      * @throws ErroCriptografia se a chave tiver tamanho errado.
      */
-    std::string criptografar(const std::string& mensagem, const Bytes& chave) const;
+    template <ContainerDeBytes M, ContainerDeBytes C>
+    std::string criptografar(const M& mensagem, const C& chave) const {
+        return criptografarBytes(comoBytes(mensagem), comoBytes(chave));
+    }
 
     /**
      * @brief Descriptografa uma mensagem produzida por criptografar().
      *
+     * @tparam C Tipo da chave (deduzido).
      * @param cifradoHex Saída de criptografar(), em hexadecimal.
      * @param chave A mesma chave usada para criptografar.
      * @return A mensagem original.
      * @throws ErroCriptografia se a chave estiver errada ou se o texto
      *         cifrado tiver sido alterado.
      */
-    std::string descriptografar(const std::string& cifradoHex, const Bytes& chave) const;
+    template <ContainerDeBytes C>
+    std::string descriptografar(std::string_view cifradoHex, const C& chave) const {
+        return descriptografarBytes(cifradoHex, comoBytes(chave));
+    }
 
     /**
      * @brief Criptografa uma mensagem usando uma senha.
@@ -107,30 +120,43 @@ public:
      * A chave é derivada da senha com Argon2id e um salt aleatório. Essa
      * derivação é propositalmente lenta para dificultar ataques de força bruta.
      *
-     * @param mensagem Texto a ser criptografado.
+     * @tparam M Tipo da mensagem (deduzido).
+     * @tparam S Tipo da senha (deduzido).
+     * @param mensagem Texto ou bytes a criptografar.
      * @param senha Senha escolhida pelo usuário.
      * @return Salt + nonce + texto cifrado, em hexadecimal.
      * @throws ErroCriptografia se faltar memória para derivar a chave.
      */
-    std::string criptografarComSenha(const std::string& mensagem, const std::string& senha) const;
+    template <ContainerDeBytes M, ContainerDeBytes S>
+    std::string criptografarComSenha(const M& mensagem, const S& senha) const {
+        return criptografarComSenhaBytes(comoBytes(mensagem), comoBytes(senha));
+    }
 
     /**
      * @brief Descriptografa uma mensagem produzida por criptografarComSenha().
      *
+     * @tparam S Tipo da senha (deduzido).
      * @param cifradoHex Saída de criptografarComSenha(), em hexadecimal.
      * @param senha A mesma senha usada para criptografar.
      * @return A mensagem original.
      * @throws ErroCriptografia se a senha estiver errada ou se o texto
      *         cifrado tiver sido alterado.
      */
-    std::string descriptografarComSenha(const std::string& cifradoHex, const std::string& senha) const;
+    template <ContainerDeBytes S>
+    std::string descriptografarComSenha(std::string_view cifradoHex, const S& senha) const {
+        return descriptografarComSenhaBytes(cifradoHex, comoBytes(senha));
+    }
 
     /**
      * @brief Converte bytes em texto hexadecimal (ex.: `{255, 10}` → `"ff0a"`).
+     * @tparam R Tipo do container (deduzido).
      * @param bytes Bytes a converter.
      * @return Texto em hexadecimal minúsculo.
      */
-    static std::string paraHex(const Bytes& bytes);
+    template <ContainerDeBytes R>
+    static std::string paraHex(const R& bytes) {
+        return paraHexBytes(comoBytes(bytes));
+    }
 
     /**
      * @brief Converte texto hexadecimal em bytes (ex.: `"ff0a"` → `{255, 10}`).
@@ -138,17 +164,37 @@ public:
      * @return Os bytes correspondentes.
      * @throws ErroCriptografia se o texto não for hexadecimal válido.
      */
-    static Bytes deHex(const std::string& hex);
+    static Bytes deHex(std::string_view hex);
 
 private:
+    /// Implementação de criptografar().
+    std::string criptografarBytes(std::span<const unsigned char> mensagem,
+                                  std::span<const unsigned char> chave) const;
+
+    /// Implementação de descriptografar().
+    std::string descriptografarBytes(std::string_view cifradoHex,
+                                     std::span<const unsigned char> chave) const;
+
+    /// Implementação de criptografarComSenha().
+    std::string criptografarComSenhaBytes(std::span<const unsigned char> mensagem,
+                                          std::span<const unsigned char> senha) const;
+
+    /// Implementação de descriptografarComSenha().
+    std::string descriptografarComSenhaBytes(std::string_view cifradoHex,
+                                             std::span<const unsigned char> senha) const;
+
+    /// Implementação de paraHex().
+    static std::string paraHexBytes(std::span<const unsigned char> bytes);
+
     /**
      * @brief Deriva uma chave de 32 bytes a partir de uma senha e um salt.
      * @param senha Senha do usuário.
      * @param salt Salt aleatório de 16 bytes.
-     * @return Chave derivada.
+     * @return Chave derivada, apagada da memória automaticamente.
      * @throws ErroCriptografia se faltar memória para o Argon2id.
      */
-    Bytes derivarChave(const std::string& senha, const Bytes& salt) const;
+    Segredo<Bytes> derivarChave(std::span<const unsigned char> senha,
+                                std::span<const unsigned char> salt) const;
 };
 
 #endif // CRIPTOGRAFADOR_HPP

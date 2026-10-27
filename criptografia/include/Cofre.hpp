@@ -8,6 +8,7 @@
 #define COFRE_HPP
 
 #include "Criptografador.hpp"
+#include "Segredo.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -43,7 +44,7 @@ struct RegistroCofre {
     int id = 0;                       ///< Número sequencial do registro (1, 2, 3...).
     std::string dataHora;             ///< Quando foi criado, ex.: "2026-10-27 14:02".
     TipoSegredo tipo = TipoSegredo::Chave; ///< Chave ou senha.
-    std::string segredo;              ///< A chave (hex) ou a senha.
+    Segredo<std::string> segredo;     ///< A chave (hex) ou a senha; apagada da memória sozinha.
     std::string impressaoDigital;     ///< Primeiros 16 bytes do texto cifrado, em hex.
     std::string descricao;            ///< Texto livre opcional para identificar o registro.
 
@@ -57,7 +58,7 @@ struct RegistroCofre {
      * @param outro Segredo a comparar (chave em hex ou senha).
      * @return true se forem iguais.
      */
-    bool confere(std::string_view outro) const;
+    bool confere(const Segredo<std::string>& outro) const;
 };
 
 /**
@@ -70,11 +71,15 @@ struct RegistroCofre {
  * Cada mensagem é reconhecida pela sua "impressão digital": os primeiros
  * 16 bytes do texto cifrado, que são aleatórios (salt ou nonce) e únicos.
  *
+ * A senha mestra e os segredos ficam em objetos Segredo<std::string>, que se
+ * apagam da memória sozinhos quando o cofre é destruído.
+ *
  * @code
  * Criptografador cripto;
  * Cofre cofre("cofre.dat", cripto);
- * cofre.abrir("senha mestra");
- * cofre.adicionar(TipoSegredo::Senha, "abc", cifradoHex, "teste");
+ * cofre.abrir(Segredo<std::string>(std::string("senha mestra")));
+ * cofre.adicionar(TipoSegredo::Senha, Segredo<std::string>(std::string("abc")),
+ *                 cifradoHex, "teste");
  * if (const RegistroCofre* r = cofre.buscar(cifradoHex)) { ... }
  * @endcode
  */
@@ -87,9 +92,6 @@ public:
      *        continuar existindo enquanto o cofre existir.
      */
     Cofre(std::filesystem::path arquivo, const Criptografador& cripto);
-
-    /// Apaga da memória a senha mestra e os segredos guardados.
-    ~Cofre();
 
     Cofre(const Cofre&) = delete;
     Cofre& operator=(const Cofre&) = delete;
@@ -106,7 +108,7 @@ public:
      * @throws ErroCofre se a senha mestra estiver errada, o arquivo estiver
      *         corrompido ou não puder ser criado.
      */
-    void abrir(const std::string& senhaMestra);
+    void abrir(Segredo<std::string> senhaMestra);
 
     /**
      * @brief Adiciona um registro e salva o cofre no disco.
@@ -117,7 +119,7 @@ public:
      * @return O registro criado.
      * @throws ErroCofre se o cofre não estiver aberto ou não puder ser salvo.
      */
-    const RegistroCofre& adicionar(TipoSegredo tipo, const std::string& segredo,
+    const RegistroCofre& adicionar(TipoSegredo tipo, Segredo<std::string> segredo,
                                    std::string_view cifradoHex, const std::string& descricao);
 
     /**
@@ -159,7 +161,7 @@ private:
 
     std::filesystem::path arquivo_;          ///< Onde o cofre é gravado.
     const Criptografador& cripto_;           ///< Usado para (des)criptografar o arquivo.
-    std::string senhaMestra_;                ///< Necessária para salvar de novo.
+    Segredo<std::string> senhaMestra_;       ///< Necessária para salvar de novo.
     std::vector<RegistroCofre> registros_;   ///< Registros carregados.
     bool aberto_ = false;                    ///< true depois de abrir() com sucesso.
 };

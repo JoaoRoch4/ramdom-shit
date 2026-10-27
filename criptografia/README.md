@@ -36,6 +36,8 @@ alteração, chave errada ou senha errada.
 ## Estrutura
 
 ```
+include/Bytes.hpp            alias Bytes + concept ContainerDeBytes (templates)
+include/Segredo.hpp          template Segredo<T>: apaga segredos da memória (RAII)
 include/Criptografador.hpp   declaração da classe + documentação Doxygen
 src/Criptografador.cpp       implementação com libsodium
 include/Cofre.hpp            registro criptografado de chaves e senhas
@@ -49,6 +51,17 @@ Formato do texto cifrado (em hexadecimal):
 
 - chave: `nonce (24) || cifrado || tag (16)`
 - senha: `salt (16) || nonce (24) || cifrado || tag (16)`
+
+## Templates
+
+- **`ContainerDeBytes`** (concept C++20): qualquer sequência contínua de bytes
+  (`std::string`, `std::string_view`, `Bytes`, `std::span`, `std::array`,
+  `Segredo`). Arrays brutos como `"oi"` são recusados porque incluiriam o `'\0'`.
+- **Funções do `Criptografador`** são templates finos no header que convertem a
+  entrada para `std::span` e chamam a implementação no `.cpp`.
+- **`Segredo<T>`** guarda senhas e chaves e as zera com `sodium_memzero` ao ser
+  destruído; não pode ser copiado sem querer (`copia()` é explícito) e compara
+  em tempo constante (`operator==`).
 
 ## Dependências
 

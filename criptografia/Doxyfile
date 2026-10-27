@@ -1,0 +1,10 @@
+PROJECT_NAME           = "Criptografia com libsodium"
+OUTPUT_DIRECTORY       = docs
+INPUT                  = include src
+FILE_PATTERNS          = *.hpp *.cpp
+RECURSIVE              = YES
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = YES
+OUTPUT_LANGUAGE        = Brazilian
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO

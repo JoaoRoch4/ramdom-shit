@@ -11,6 +11,7 @@ pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
 
 add_executable(cripto
     src/main.cpp
+    src/Cofre.cpp
     src/Criptografador.cpp
     src/Menu.cpp
 )

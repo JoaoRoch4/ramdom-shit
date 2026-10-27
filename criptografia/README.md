@@ -6,6 +6,25 @@ Programa de terminal que criptografa e descriptografa mensagens de dois jeitos:
 |---|---|
 | 1 / 2 | Gera uma **chave aleatória** de 32 bytes, mostra a chave e a mensagem criptografada; com as duas, recupera o original. |
 | 3 / 4 | Usa uma **senha**: a chave é derivada com **Argon2id** e um salt aleatório. |
+| 5 | Mostra o **registro do cofre**: todas as chaves e senhas criadas. |
+
+## Cofre (registro de chaves e senhas)
+
+Ao iniciar, o programa pede a **senha mestra** do arquivo `cofre.dat` (na
+primeira vez, cria um cofre novo). Cada chave ou senha usada para criptografar
+é guardada nele com data, tipo e uma descrição opcional.
+
+Ao descriptografar, a mensagem é reconhecida pela sua *impressão digital*
+(os 16 primeiros bytes do texto cifrado, que são aleatórios):
+
+- **Enter** sem digitar nada usa o segredo guardado no cofre;
+- digitando um segredo, o programa diz se ele **confere** com o registrado
+  (comparação em tempo constante).
+
+O `cofre.dat` é criptografado com a própria classe `Criptografador`
+(Argon2id + XChaCha20-Poly1305): sem a senha mestra ele é ilegível, e
+qualquer alteração no arquivo faz a abertura falhar. **Se a senha mestra for
+esquecida, o cofre não pode ser recuperado.**
 
 Ao digitar a senha aparece `*` para cada caractere (Backspace apaga,
 Ctrl+C cancela). A leitura é tecla a tecla: `termios` no Linux/macOS e
@@ -19,6 +38,8 @@ alteração, chave errada ou senha errada.
 ```
 include/Criptografador.hpp   declaração da classe + documentação Doxygen
 src/Criptografador.cpp       implementação com libsodium
+include/Cofre.hpp            registro criptografado de chaves e senhas
+src/Cofre.cpp                implementação do cofre
 include/Menu.hpp             declaração do menu de terminal
 src/Menu.cpp                 menu interativo + leitura de senha oculta
 src/main.cpp                 apenas o int main
